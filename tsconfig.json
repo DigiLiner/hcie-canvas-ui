@@ -1,0 +1,16 @@
+{
+  "extends": "../hcie/tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "composite": true
+  },
+  "include": ["src/**/*"],
+  "references": [
+    { "path": "../hcie-core" },
+    { "path": "../hcie-shared" },
+    { "path": "../hcie-io" },
+    { "path": "../hcie-tools" },
+    { "path": "../hcie-ui-components" }
+  ]
+}
