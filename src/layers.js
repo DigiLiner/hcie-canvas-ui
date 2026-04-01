@@ -1,49 +1,38 @@
 import { g, layers, LayerClass, Tool } from '@hcie/core';
 import { LayerAddAction, LayerDeleteAction, LayerMoveAction, LayerPropertyAction } from '@hcie/core';
-import { drawShapesToCtx, Shape } from '@hcie/shared';
-
+import { drawShapesToCtx } from '@hcie/shared';
 import { drawSelectionBorder } from '@hcie/tools';
-
-const ctx = (document.getElementById("drawingCanvas") as HTMLCanvasElement)?.getContext("2d");
-const originalCanvas = document.getElementById('originalCanvas') as HTMLCanvasElement | null;
-
+const ctx = document.getElementById("drawingCanvas")?.getContext("2d");
+const originalCanvas = document.getElementById('originalCanvas');
 /**
  * Layer Manager
  * Handles layer operations: add, delete, select, visibility, reorder, render
  */
-
 // ─── Layer Operations ─────────────────────────────────────
-
 /**
  * Add a new layer above the active layer
  */
-export function addLayer(name?: string) {
+export function addLayer(name) {
     const idx = g.activeLayerIndex + 1;
     const layerName = name || `Layer ${layers.length}`;
     const newLayer = new LayerClass(layerName);
-
     // Check if we want a vector layer (simple check for now, can be expanded)
     if (name && name.toLowerCase().includes('vector')) {
         newLayer.type = 'vector';
         newLayer.shapes = []; // Array to hold shape objects
     }
-
     layers.splice(idx, 0, newLayer);
     g.activeLayerIndex = idx;
-
     if (window.historyManager) {
         window.historyManager.push(new LayerAddAction(idx, newLayer));
     }
-
     renderLayers();
     updateLayerPanel();
     console.log(`Added layer "${layerName}" at index ${idx}`);
 }
-
 export function addVectorLayer() {
     addLayer("Vector Layer");
 }
-
 /**
  * Delete the active layer (prevents deleting the last layer)
  */
@@ -54,13 +43,10 @@ export function deleteLayer() {
     }
     const layerToDelete = layers[g.activeLayerIndex];
     const index = g.activeLayerIndex;
-
     const removed = layers.splice(g.activeLayerIndex, 1);
-
     if (window.historyManager) {
         window.historyManager.push(new LayerDeleteAction(index, layerToDelete));
     }
-
     console.log(`Deleted layer "${removed[0].name}"`);
     // Adjust active index
     if (g.activeLayerIndex >= layers.length) {
@@ -69,11 +55,10 @@ export function deleteLayer() {
     renderLayers();
     updateLayerPanel();
 }
-
 /**
  * Select a layer by index
  */
-export function selectLayer(index: number) {
+export function selectLayer(index) {
     if (index < 0 || index >= layers.length) {
         console.error(`Layer index ${index} out of range`);
         return;
@@ -82,51 +67,47 @@ export function selectLayer(index: number) {
     updateLayerPanel();
     console.log(`Selected layer "${layers[index].name}" (index ${index})`);
 }
-
 /**
  * Toggle visibility of a layer
  */
-export function toggleLayerVisibility(index: number) {
-    if (index < 0 || index >= layers.length) return;
-
+export function toggleLayerVisibility(index) {
+    if (index < 0 || index >= layers.length)
+        return;
     const oldValue = layers[index].visible;
     layers[index].visible = !layers[index].visible;
     const newValue = layers[index].visible;
-
     if (window.historyManager) {
         window.historyManager.push(new LayerPropertyAction(index, 'visible', oldValue, newValue));
     }
-
     renderLayers();
     updateLayerPanel();
 }
-
 /**
  * Move a layer from one position to another
  */
-export function moveLayer(fromIndex: number, toIndex: number, skipRecord = false) {
-    if (fromIndex < 0 || fromIndex >= layers.length) return;
-    if (toIndex < 0 || toIndex >= layers.length) return;
-
+export function moveLayer(fromIndex, toIndex, skipRecord = false) {
+    if (fromIndex < 0 || fromIndex >= layers.length)
+        return;
+    if (toIndex < 0 || toIndex >= layers.length)
+        return;
     if (!skipRecord && window.historyManager) {
         window.historyManager.push(new LayerMoveAction(fromIndex, toIndex));
     }
-
     const [layer] = layers.splice(fromIndex, 1);
     layers.splice(toIndex, 0, layer);
-
     // Update active index to follow the moved layer
     if (g.activeLayerIndex === fromIndex) {
         g.activeLayerIndex = toIndex;
-    } else if (fromIndex < g.activeLayerIndex && toIndex >= g.activeLayerIndex) {
+    }
+    else if (fromIndex < g.activeLayerIndex && toIndex >= g.activeLayerIndex) {
         g.activeLayerIndex--;
-    } else if (fromIndex > g.activeLayerIndex && toIndex <= g.activeLayerIndex) {
+    }
+    else if (fromIndex > g.activeLayerIndex && toIndex <= g.activeLayerIndex) {
         g.activeLayerIndex++;
     }
     renderLayers();
     updateLayerPanel();
 }
-
 /**
  * Move active layer up (visually higher = later in array)
  */
@@ -135,7 +116,6 @@ export function moveLayerUp() {
         moveLayer(g.activeLayerIndex, g.activeLayerIndex + 1);
     }
 }
-
 /**
  * Move active layer down (visually lower = earlier in array)
  */
@@ -144,114 +124,97 @@ export function moveLayerDown() {
         moveLayer(g.activeLayerIndex, g.activeLayerIndex - 1);
     }
 }
-
 /**
  * Rename a layer
  */
-export function renameLayer(index: number, newName: string) {
-    if (index < 0 || index >= layers.length) return;
-
+export function renameLayer(index, newName) {
+    if (index < 0 || index >= layers.length)
+        return;
     const oldName = layers[index].name;
     layers[index].name = newName;
-
     if (window.historyManager && oldName !== newName) {
         window.historyManager.push(new LayerPropertyAction(index, 'name', oldName, newName));
     }
-
     updateLayerPanel();
 }
-
-
 // ─── Rendering ─────────────────────────────────────────────
-
 /**
  * Composite all visible layers onto the drawing canvas (bottom to top)
  * @param {HTMLCanvasElement} [liveCanvas] - Optional temp canvas for the active layer (used during drawing)
  */
-export function renderLayers(liveCanvas?: HTMLCanvasElement) {
-    if (!ctx) return;
-
+export function renderLayers(liveCanvas) {
+    if (!ctx)
+        return;
     // Clear the display canvas
     ctx.clearRect(0, 0, g.image_width, g.image_height);
-
     // Composite each visible layer
     for (let i = 0; i < layers.length; i++) {
         const layer = layers[i];
-        if (!layer.visible) continue;
-
+        if (!layer.visible)
+            continue;
         ctx.save();
         ctx.globalAlpha = layer.opacity;
         ctx.globalCompositeOperation = layer.blendMode;
-
         // Draw the permanent layer content (raster pixels)
-        ctx.drawImage(layer.canvas as HTMLCanvasElement, 0, 0);
-
+        ctx.drawImage(layer.canvas, 0, 0);
         // Render shapes for THIS layer (if any exist)
         if (layer.shapes && layer.shapes.length > 0) {
             drawShapesToCtx(ctx, layer.shapes);
         }
-
         // ✨ AI ARCHITECTURE NOTE: Live Vector Drawing Preview
         // We draw the 'in-progress' vector shape directly from the manager to avoid rasterizing
         // every frame into tempCanvas. This prevents 'ghosting' artifacts.
-        const vtm = (window as any).vectorToolManager;
+        const vtm = window.vectorToolManager;
         if (vtm && vtm.isDrawing && vtm.currentShape && i === g.activeLayerIndex) {
             drawShapesToCtx(ctx, [vtm.currentShape]);
         }
-
         // If this is the active layer and we are drawing (liveCanvas exists),
         // draw the temporary stroke (composition happens after selection masking)
         if (liveCanvas && i === g.activeLayerIndex) {
             const isEraser = g.current_tool.id === Tool.Eraser.id;
-            
             // Apply selection mask to the live preview if active
             if (g.isSelectionActive && g.selectionCanvas) {
                 // Persistent buffer to avoid allocation overhead during mousemove
-                if (!(window as any)._maskedStrokeBuffer) {
-                    (window as any)._maskedStrokeBuffer = g.createCanvas(g.image_width, g.image_height);
+                if (!window._maskedStrokeBuffer) {
+                    window._maskedStrokeBuffer = g.createCanvas(g.image_width, g.image_height);
                 }
-                const offCanvas = (window as any)._maskedStrokeBuffer;
+                const offCanvas = window._maskedStrokeBuffer;
                 if (offCanvas.width !== g.image_width || offCanvas.height !== g.image_height) {
                     offCanvas.width = g.image_width;
                     offCanvas.height = g.image_height;
                 }
-                
                 const offCtx = offCanvas.getContext("2d");
                 if (offCtx) {
                     offCtx.clearRect(0, 0, g.image_width, g.image_height);
-                    
                     // Copy stroke to buffer
                     offCtx.globalAlpha = 1.0;
                     offCtx.globalCompositeOperation = "source-over";
                     offCtx.drawImage(liveCanvas, 0, 0);
-                    
                     // Apply mask
                     offCtx.globalCompositeOperation = "destination-in";
-                    offCtx.drawImage(g.selectionCanvas as HTMLCanvasElement, 0, 0);
-                    
+                    offCtx.drawImage(g.selectionCanvas, 0, 0);
                     // Draw masked result (inherits layer's alpha/blend from current ctx state)
-                    if (isEraser) ctx.globalCompositeOperation = "destination-out";
+                    if (isEraser)
+                        ctx.globalCompositeOperation = "destination-out";
                     ctx.drawImage(offCanvas, 0, 0);
                 }
-            } else {
-                if (isEraser) ctx.globalCompositeOperation = "destination-out";
+            }
+            else {
+                if (isEraser)
+                    ctx.globalCompositeOperation = "destination-out";
                 ctx.drawImage(liveCanvas, 0, 0);
             }
         }
-
         ctx.restore();
     }
-
     // Draw Floating Selection Content (Move Content tool)
     if (g.floatingContent && g.floatingContent.canvas) {
         ctx.save();
-        ctx.drawImage(g.floatingContent.canvas as HTMLCanvasElement, g.floatingContent.x, g.floatingContent.y);
+        ctx.drawImage(g.floatingContent.canvas, g.floatingContent.x, g.floatingContent.y);
         ctx.restore();
     }
-
     // Draw Selection Border (Marching Ants) if active
     drawSelectionBorder(ctx);
-
     // Draw Brush Preview Circle (follow mouse) for drawing tools
     const drawingTools = [Tool.Pen.id, Tool.Brush.id, Tool.Eraser.id, Tool.Spray.id];
     if (drawingTools.includes(g.current_tool.id) && !g.isSelectionActive && !g.zooming) {
@@ -260,22 +223,17 @@ export function renderLayers(liveCanvas?: HTMLCanvasElement) {
         // Use pen_width for radius (divided by 2)
         const radius = Math.max(2, g.pen_width / 2);
         ctx.arc(g.pX, g.pY, radius, 0, Math.PI * 2);
-        
         ctx.globalAlpha = 0.8;
-        
         // Outer black stroke for contrast
         ctx.lineWidth = 2.5;
         ctx.strokeStyle = '#000';
         ctx.stroke();
-        
         // Inner white stroke
         ctx.lineWidth = 1;
         ctx.strokeStyle = '#fff';
         ctx.stroke();
-        
         ctx.restore();
     }
-
     // Also update originalCanvas to match the composite (for tools that read from it)
     if (!liveCanvas && originalCanvas) {
         const origCtx = originalCanvas.getContext("2d");
@@ -285,32 +243,27 @@ export function renderLayers(liveCanvas?: HTMLCanvasElement) {
         }
     }
 }
-
 /**
  * Get the active layer object
  */
 export function getActiveLayer() {
     return layers[g.activeLayerIndex] || null;
 }
-
 // ─── Layer Panel UI ────────────────────────────────────────
-
 /**
  * Update the Layers panel UI to reflect current layer state
  */
 export function updateLayerPanel() {
     const layersList = document.querySelector('#layers-pane .layers-list');
-    if (!layersList) return;
-
+    if (!layersList)
+        return;
     layersList.innerHTML = '';
-
     // Render layers in reverse order (top layer first in the panel)
     for (let i = layers.length - 1; i >= 0; i--) {
         const layer = layers[i];
         const item = document.createElement('div');
         item.className = `layer-item${i === g.activeLayerIndex ? ' selected' : ''}`;
         item.dataset.index = i.toString();
-
         // Visibility toggle
         const visIcon = document.createElement('span');
         visIcon.className = `layer-icon${layer.visible ? ' active' : ''}`;
@@ -321,7 +274,6 @@ export function updateLayerPanel() {
             e.stopPropagation();
             toggleLayerVisibility(i);
         });
-
         // Thumbnail
         const thumb = document.createElement('div');
         thumb.className = 'layer-thumbnail';
@@ -331,15 +283,14 @@ export function updateLayerPanel() {
         thumbCanvas.height = 32;
         const thumbCtx = thumbCanvas.getContext('2d');
         if (thumbCtx) {
-            thumbCtx.drawImage(layer.canvas as HTMLCanvasElement, 0, 0, g.image_width, g.image_height, 0, 0, 32, 32);
+            thumbCtx.drawImage(layer.canvas, 0, 0, g.image_width, g.image_height, 0, 0, 32, 32);
         }
         thumb.appendChild(thumbCanvas);
-
         // Name (editable on double-click)
         const nameDiv = document.createElement('div');
         nameDiv.className = 'layer-name';
         nameDiv.textContent = layer.name;
-        nameDiv.addEventListener('dblclick', (e: MouseEvent) => {
+        nameDiv.addEventListener('dblclick', (e) => {
             e.stopPropagation();
             const input = document.createElement('input');
             input.type = 'text';
@@ -353,84 +304,74 @@ export function updateLayerPanel() {
                 renameLayer(i, input.value || layer.name);
             };
             input.addEventListener('blur', finish);
-            input.addEventListener('keydown', (ke: KeyboardEvent) => {
-                if (ke.key === 'Enter') finish();
+            input.addEventListener('keydown', (ke) => {
+                if (ke.key === 'Enter')
+                    finish();
                 if (ke.key === 'Escape') {
                     input.value = layer.name;
                     finish();
                 }
             });
         });
-
         // Lock indicator
         const lockIcon = document.createElement('span');
         lockIcon.className = 'layer-icon';
         lockIcon.title = layer.locked ? 'Locked' : 'Unlocked';
         lockIcon.textContent = layer.locked ? '🔒' : '';
         lockIcon.style.cursor = 'pointer';
-        lockIcon.addEventListener('click', (e: MouseEvent) => {
+        lockIcon.addEventListener('click', (e) => {
             e.stopPropagation();
             layers[i].locked = !layers[i].locked;
             updateLayerPanel();
         });
-
         // Blend Mode Dropdown
         const blendSelect = document.createElement('select');
         blendSelect.className = 'layer-blend-mode';
         blendSelect.style.cssText = 'font-size: 10px; margin-left: 5px; width: 60px;';
-
         const modes = [
             'source-over', 'multiply', 'screen', 'overlay', 'darken', 'lighten',
             'color-dodge', 'color-burn', 'hard-light', 'soft-light', 'difference',
             'exclusion', 'hue', 'saturation', 'color', 'luminosity'
         ];
-
         // Map internal names to display names if needed (e.g. source-over -> Normal)
-        const displayNames: Record<string, string> = {
+        const displayNames = {
             'source-over': 'Normal',
             'color-dodge': 'Color Dodge',
             'color-burn': 'Color Burn',
             'hard-light': 'Hard Light',
             'soft-light': 'Soft Light'
         };
-
         modes.forEach(mode => {
             const option = document.createElement('option');
             option.value = mode;
             option.textContent = displayNames[mode] || mode.charAt(0).toUpperCase() + mode.slice(1);
-            if (layer.blendMode === mode) option.selected = true;
+            if (layer.blendMode === mode)
+                option.selected = true;
             blendSelect.appendChild(option);
         });
-
-        const stopProp = (e: Event) => e.stopPropagation();
-        blendSelect.addEventListener('mousedown', (e: MouseEvent) => {
+        const stopProp = (e) => e.stopPropagation();
+        blendSelect.addEventListener('mousedown', (e) => {
             e.stopPropagation();
             // Capture initial value for history
-            (blendSelect as any).dataset.startValue = layers[i].blendMode;
+            blendSelect.dataset.startValue = layers[i].blendMode;
         });
         blendSelect.addEventListener('mouseup', stopProp);
         blendSelect.addEventListener('click', stopProp);
-
         // Handle change
-        blendSelect.addEventListener('change', (e: Event) => {
+        blendSelect.addEventListener('change', (e) => {
             e.stopPropagation();
-            const newValue = (e.target as HTMLSelectElement).value;
-            const startValue = (blendSelect as any).dataset.startValue || layers[i].blendMode;
-
+            const newValue = e.target.value;
+            const startValue = blendSelect.dataset.startValue || layers[i].blendMode;
             if (window.historyManager && startValue !== newValue) {
-                window.historyManager.push(new LayerPropertyAction(i, 'blendMode', startValue as any, newValue as any));
+                window.historyManager.push(new LayerPropertyAction(i, 'blendMode', startValue, newValue));
             }
-
-            layers[i].blendMode = newValue as any;
+            layers[i].blendMode = newValue;
             renderLayers();
         });
-
-
         // Click to select layer
         item.addEventListener('click', () => {
             selectLayer(i);
         });
-
         item.appendChild(visIcon);
         item.appendChild(thumb);
         item.appendChild(nameDiv);
@@ -438,23 +379,19 @@ export function updateLayerPanel() {
         item.appendChild(lockIcon);
         layersList.appendChild(item);
     }
-
     // Update layer opacity slider if it exists
-    const layerOpacitySlider = document.getElementById('layerOpacity') as HTMLInputElement;
+    const layerOpacitySlider = document.getElementById('layerOpacity');
     if (layerOpacitySlider) {
         layerOpacitySlider.value = Math.round(layers[g.activeLayerIndex].opacity * 100).toString();
     }
 }
-
 // ─── Initialization ────────────────────────────────────────
-
 document.addEventListener('DOMContentLoaded', function () {
     // Wire up layer panel buttons
     const addLayerBtn = document.querySelector('.panel-footer-btn[title="Add Layer"]');
     const deleteLayerBtn = document.querySelector('.panel-footer-btn[title="Delete Layer"]');
     const moveUpBtn = document.querySelector('.panel-footer-btn[title="Move Up"]');
     const moveDownBtn = document.querySelector('.panel-footer-btn[title="Move Down"]');
-
     if (addLayerBtn) {
         addLayerBtn.addEventListener('click', () => addLayer());
     }
@@ -467,25 +404,23 @@ document.addEventListener('DOMContentLoaded', function () {
     if (moveDownBtn) {
         moveDownBtn.addEventListener('click', () => moveLayerDown());
     }
-
     // Layer Opacity Slider
-    const layerOpacitySlider = document.getElementById('layerOpacity') as HTMLInputElement;
+    const layerOpacitySlider = document.getElementById('layerOpacity');
     if (layerOpacitySlider) {
-        layerOpacitySlider.addEventListener('input', (e: Event) => {
-            const val = parseInt((e.target as HTMLInputElement).value);
+        layerOpacitySlider.addEventListener('input', (e) => {
+            const val = parseInt(e.target.value);
             const layer = layers[g.activeLayerIndex];
             if (layer) {
                 layer.opacity = val / 100;
                 renderLayers();
             }
         });
-
         let startOpacity = 1.0;
         layerOpacitySlider.addEventListener('mousedown', () => {
             const layer = layers[g.activeLayerIndex];
-            if (layer) startOpacity = layer.opacity;
+            if (layer)
+                startOpacity = layer.opacity;
         });
-
         layerOpacitySlider.addEventListener('change', () => {
             const layer = layers[g.activeLayerIndex];
             if (layer && window.historyManager) {
@@ -493,55 +428,44 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         });
     }
-
     // Initial render of the layer panel
     setTimeout(() => {
         updateLayerPanel();
     }, 100);
-
     console.log('Layers manager initialized');
 });
-
 import { appEvents } from '@hcie/core';
-
 // Listen for document switch events from the core to update the UI
 appEvents.addEventListener('document:switch', () => {
     renderLayers();
     updateLayerPanel();
 });
-
-export function renderVectorLayer(layer: LayerClass) {
-    if (!layer) return;
-
+export function renderVectorLayer(layer) {
+    if (!layer)
+        return;
     if (layer.type === 'vector') {
-        const ctx: any = layer.ctx;
-        ctx.clearRect(0, 0, (layer.canvas as any).width, (layer.canvas as any).height);
+        const ctx = layer.ctx;
+        ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
         drawShapesToCtx(ctx, layer.shapes || []);
     }
 }
-
-export function renderTextLayer(layer: LayerClass) {
-    if (!layer || layer.type !== 'text') return;
-
-    const ctx: any = layer.ctx;
+export function renderTextLayer(layer) {
+    if (!layer || layer.type !== 'text')
+        return;
+    const ctx = layer.ctx;
     const data = layer.textData;
-
-    ctx.clearRect(0, 0, (layer.canvas as any).width, (layer.canvas as any).height);
-
-    if (layer.isBeingEdited) return; // Hide text while editing to avoid ghosting
-
-
+    ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
+    if (layer.isBeingEdited)
+        return; // Hide text while editing to avoid ghosting
     ctx.save();
     const style = data.italic ? 'italic' : 'normal';
     const weight = data.bold ? 'bold' : 'normal';
     ctx.font = `${style} ${weight} ${data.size}px ${data.font}, "Roboto", sans-serif`;
     ctx.fillStyle = data.color;
     ctx.textBaseline = 'top';
-
     const lines = (data.text || "").split('\n');
     const lineHeight = data.size * 1.2;
-
-    lines.forEach((line: string, index: number) => {
+    lines.forEach((line, index) => {
         ctx.fillText(line, data.x, data.y + (index * lineHeight));
     });
     ctx.restore();
