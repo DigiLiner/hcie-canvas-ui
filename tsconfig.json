@@ -1,1 +1,1 @@
-{"extends": "../hcie/tsconfig.base.json", "compilerOptions": {"composite": true, "rootDir": "./src", "outDir": "./dist", "ignoreDeprecations": "6.0"}, "include": ["src/**/*"], "references": [{"path": "../hcie-core"}, {"path": "../hcie-tools"}]}
+{"extends": "../hcie/tsconfig.base.json", "compilerOptions": {"composite": true, "rootDir": "./src", "outDir": "./dist"}, "include": ["src/**/*"], "references": [{"path": "../hcie-core"}, {"path": "../hcie-tools"}]}

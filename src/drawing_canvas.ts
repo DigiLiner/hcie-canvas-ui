@@ -1303,6 +1303,10 @@ if (typeof window !== 'undefined') {
         getCanvasImageDataURL,
         zoomIn,
         zoomOut,
-        applyZoom
+        applyZoom,
+        on_canvas_mouse_down,
+        on_canvas_mouse_move,
+        on_canvas_mouse_up,
+        finishDrawing
     });
 }
