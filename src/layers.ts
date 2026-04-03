@@ -252,6 +252,59 @@ export function renderLayers(liveCanvas?: HTMLCanvasElement) {
     // Draw Selection Border (Marching Ants) if active
     drawSelectionBorder(ctx);
 
+    // Draw Crop UI if a crop area is pending confirmation
+    if ((g as any).lastCropRect) {
+        const r = (g as any).lastCropRect;
+        ctx.save();
+        
+        // 1. Draw a semi-transparent dark overlay outside the crop area
+        ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+        // Top
+        ctx.fillRect(0, 0, g.image_width, r.y);
+        // Bottom
+        ctx.fillRect(0, r.y + r.h, g.image_width, g.image_height - (r.y + r.h));
+        // Left
+        ctx.fillRect(0, r.y, r.x, r.h);
+        // Right
+        ctx.fillRect(r.x + r.w, r.y, g.image_width - (r.x + r.w), r.h);
+
+        // 2. Draw solid blue border for crop boundary
+        ctx.strokeStyle = "rgba(0, 120, 215, 1.0)";
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+
+        // 3. Draw handles at corners and midpoints
+        const s = 7; // handle size
+        const handles = [
+            {x: r.x, y: r.y}, {x: r.x + r.w/2, y: r.y}, {x: r.x + r.w, y: r.y},
+            {x: r.x, y: r.y + r.h/2}, {x: r.x + r.w, y: r.y + r.h/2},
+            {x: r.x, y: r.y + r.h}, {x: r.x + r.w/2, y: r.y + r.h}, {x: r.x + r.w, y: r.y + r.h}
+        ];
+        
+        handles.forEach(h => {
+            ctx.fillStyle = "#fff";
+            ctx.strokeStyle = "#0078d7";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.rect(h.x - s/2, h.y - s/2, s, s);
+            ctx.fill();
+            ctx.stroke();
+        });
+        
+        // 4. Instructional text
+        if (r.w > 80 && r.h > 40) {
+            ctx.fillStyle = "white";
+            ctx.font = "bold 11px Arial, sans-serif";
+            ctx.textAlign = "center";
+            ctx.shadowColor = "black";
+            ctx.shadowBlur = 4;
+            ctx.fillText("ENTER ONAYLAR", r.x + r.w/2, r.y + r.h/2);
+            ctx.fillText("ESC İPTAL", r.x + r.w/2, r.y + r.h/2 + 14);
+        }
+
+        ctx.restore();
+    }
+
     // Draw Brush Preview Circle (follow mouse) for drawing tools
     const drawingTools = [Tool.Pen.id, Tool.Brush.id, Tool.Eraser.id, Tool.Spray.id];
     if (drawingTools.includes(g.current_tool.id) && !g.isSelectionActive && !g.zooming) {

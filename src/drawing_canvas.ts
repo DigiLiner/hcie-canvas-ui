@@ -275,14 +275,7 @@ export function on_canvas_mouse_down(e: MouseEvent) {
                     // magicWandSelection (startX, startY, sourceCtx, tolerance, mode)
                     magicWandSelection(g.pX, g.pY, sourceCtx, tolerance, mode);
 
-                    // Re-extract border paths
-                    if (g.isSelectionActive) {
-                        drawSelectionBorder(tempCtx);
-                        if (can) {
-                            const canCtx = can.getContext('2d');
-                            if (canCtx) drawSelectionBorder(canCtx as CanvasRenderingContext2D);
-                        }
-                    }
+                    // drawSelectionBorder(tempCtx); removed to fix trails
                     g.isSelectionActive = !!g.selectionCanvas;
                 } catch (e) {
                     console.error("Magic Wand Error:", e);
@@ -310,9 +303,46 @@ export function on_canvas_mouse_down(e: MouseEvent) {
             g.lastStampY = g.pY;
             drawEraser(tempCtx, g.startX, g.startY, g.pX, g.pY);
             break;
-        case Tool.RectSelect.id:
-        case Tool.EllipseSelect.id:
-        case Tool.Lasso.id:
+        case (Tool as any).RectSelect.id:
+        case (Tool as any).EllipseSelect.id:
+        case (Tool as any).CircleSelect.id:
+        case (Tool as any).SingleRowSelect.id:
+        case (Tool as any).SingleColumnSelect.id:
+        case (Tool as any).Crop.id:
+            if ((g as any).lastCropRect) {
+                const r = (g as any).lastCropRect;
+                const s = 15; // Detection radius
+                const handles = [
+                    {x: r.x, y: r.y}, {x: r.x + r.w/2, y: r.y}, {x: r.x + r.w, y: r.y},
+                    {x: r.x, y: r.y + r.h/2}, {x: r.x + r.w, y: r.y + r.h/2},
+                    {x: r.x, y: r.y + r.h}, {x: r.x + r.w/2, y: r.y + r.h}, {x: r.x + r.w, y: r.y + r.h}
+                ];
+                
+                let handleIndex = -1;
+                for (let i = 0; i < handles.length; i++) {
+                    const h = handles[i];
+                    if (Math.abs(g.pX - h.x) < s && Math.abs(g.pY - h.y) < s) {
+                        handleIndex = i;
+                        break;
+                    }
+                }
+
+                if (handleIndex !== -1) {
+                    (g as any)._isResizingCrop = true;
+                    (g as any)._cropResizeHandle = handleIndex;
+                    (g as any)._cropRefRect = { ...r };
+                    console.log(`[DEBUG] Crop resizing handle: ${handleIndex}`);
+                } else if (g.pX >= r.x && g.pX <= r.x + r.w && g.pY >= r.y && g.pY <= r.y + r.h) {
+                    (g as any)._isMovingCrop = true;
+                    (g as any)._cropRefRect = { ...r };
+                    console.log(`[DEBUG] Crop moving area`);
+                } else {
+                    // Start new crop
+                    (g as any).lastCropRect = null;
+                }
+            }
+            break;
+        case (Tool as any).Lasso.id:
             // Selection tools: Only move if clicking INSIDE existing selection
             if (g.isSelectionActive && typeof isPointInSelection === 'function' && isPointInSelection(g.pX, g.pY)) {
                 g.movingSelection = true;
@@ -471,7 +501,11 @@ export function on_canvas_mouse_move(e: MouseEvent) {
     // ✨ AI ARCHITECTURE NOTE: We explicitly EXCLUDE vector tools from the raster drawing context.
     // Vector tools are managed by VectorToolManager (vtm) which draws to layer.shapes.
     // Drawing them into tempCtx would 'burn' them into the raster layer pixels prematurely.
-    const isRasterShapeTool = [Tool.RectSelect.id, Tool.EllipseSelect.id, Tool.Lasso.id, Tool.PolySelect.id, Tool.Crop.id].includes(g.current_tool.id);
+    const isRasterShapeTool = [
+        (Tool as any).RectSelect.id, (Tool as any).EllipseSelect.id, (Tool as any).CircleSelect.id,
+        (Tool as any).SingleRowSelect.id, (Tool as any).SingleColumnSelect.id,
+        (Tool as any).Lasso.id, (Tool as any).PolySelect.id, (Tool as any).Crop.id
+    ].includes(g.current_tool.id);
     const isVectorShapeTool = [Tool.Line.id, Tool.Circle.id, Tool.Rectangle.id, Tool.Rounded_Rectangle.id, Tool.Ellipse.id].includes(g.current_tool.id);
 
     if (!tempCtx) return;
@@ -583,6 +617,83 @@ export function on_canvas_mouse_move(e: MouseEvent) {
                 g.selectionPreviewBorder = [getEllipseBorder(g.startX, g.startY, g.pX, g.pY)];
             }
         }
+    } else if (g.current_tool.id === (Tool as any).CircleSelect.id) {
+        if (g.movingSelection) {
+            const dx = g.pX - g.startX;
+            const dy = g.pY - g.startY;
+            if (typeof moveSelectionMask === 'function') moveSelectionMask(dx, dy);
+            g.startX = g.pX;
+            g.startY = g.pY;
+        } else {
+            if (typeof getEllipseBorder === 'function') {
+                // Square constraint for circle
+                const side = Math.max(Math.abs(g.pX - g.startX), Math.abs(g.pY - g.startY));
+                const nx2 = g.startX + (g.pX < g.startX ? -side : side);
+                const ny2 = g.startY + (g.pY < g.startY ? -side : side);
+                g.selectionPreviewBorder = [getEllipseBorder(g.startX, g.startY, nx2, ny2)];
+            }
+        }
+    } else if (g.current_tool.id === (Tool as any).SingleRowSelect.id) {
+        if (g.movingSelection) {
+            const dy = g.pY - g.startY;
+            if (typeof moveSelectionMask === 'function') moveSelectionMask(0, dy);
+            g.startX = g.pX;
+            g.startY = g.pY;
+        } else {
+             if (typeof getRectBorder === 'function') {
+                g.selectionPreviewBorder = [getRectBorder(0, g.pY, g.image_width, g.pY + 1)];
+            }
+        }
+    } else if (g.current_tool.id === (Tool as any).SingleColumnSelect.id) {
+        if (g.movingSelection) {
+            const dx = g.pX - g.startX;
+            if (typeof moveSelectionMask === 'function') moveSelectionMask(dx, 0);
+            g.startX = g.pX;
+            g.startY = g.pY;
+        } else {
+             if (typeof getRectBorder === 'function') {
+                g.selectionPreviewBorder = [getRectBorder(g.pX, 0, g.pX + 1, g.image_height)];
+            }
+        }
+    } else if (g.current_tool.id === (Tool as any).Crop.id) {
+        if ((g as any)._isResizingCrop) {
+            const r = { ...(g as any)._cropRefRect };
+            const dx = g.pX - g.startX;
+            const dy = g.pY - g.startY;
+            
+            // 0:TL, 1:TM, 2:TR, 3:ML, 4:MR, 5:BL, 6:BM, 7:BR
+            switch((g as any)._cropResizeHandle) {
+                case 0: r.x += dx; r.y += dy; r.w -= dx; r.h -= dy; break;
+                case 1: r.y += dy; r.h -= dy; break;
+                case 2: r.y += dy; r.w += dx; r.h -= dy; break;
+                case 3: r.x += dx; r.w -= dx; break;
+                case 4: r.w += dx; break;
+                case 5: r.x += dx; r.w -= dx; r.h += dy; break;
+                case 6: r.h += dy; break;
+                case 7: r.w += dx; r.h += dy; break;
+            }
+            // Ensure no negativeDimensions for Crop
+            if (r.w < 10) r.w = 10;
+            if (r.h < 10) r.h = 10;
+
+            (g as any).lastCropRect = r;
+        } else if ((g as any)._isMovingCrop) {
+            const r = { ...(g as any)._cropRefRect };
+            const dx = g.pX - g.startX;
+            const dy = g.pY - g.startY;
+            r.x += dx;
+            r.y += dy;
+            (g as any).lastCropRect = r;
+        } else {
+            // Drafting initial crop
+            (g as any).lastCropRect = {
+                x: Math.min(g.startX, g.pX),
+                y: Math.min(g.startY, g.pY),
+                w: Math.abs(g.startX - g.pX),
+                h: Math.abs(g.startY - g.pY)
+            };
+        }
+        g.selectionPreviewBorder = []; // CLEAR: We don't want marching ants for Crop
     } else if (g.current_tool.id === Tool.Lasso.id) {
         if (g.movingSelection) {
             const dx = g.pX - g.startX;
@@ -657,18 +768,31 @@ export function on_canvas_mouse_move(e: MouseEvent) {
     if (typeof renderLayers === 'function') renderLayers(tempCanvas as HTMLCanvasElement);
 }
 
+
 export function on_canvas_mouse_up(_e: MouseEvent) {
     if (can) can.style.cursor = 'crosshair';
     if (!g.drawing) return;
 
-    if (g.current_tool.id === Tool.PolySelect.id) {
-        // Polygon handling: don't finalize on MouseUp, wait for double-click or Enter
+    if (g.current_tool.id === (Tool as any).Crop.id) {
+        const w = (window as any);
+        w._isResizingCrop = false;
+        w._isMovingCrop = false;
+        g.drawing = false;
+        if (typeof (window as any).renderLayers === 'function') (window as any).renderLayers();
         return;
     }
 
-    finishDrawing(_e);
-}
+    const manualFinalizeTools = [
+        (Tool as any).PolySelect?.id, 
+        (Tool as any).Crop?.id
+    ];
+    
+    if (!manualFinalizeTools.includes(g.current_tool.id)) {
+        finishDrawing(_e);
+    }
 
+    g.drawing = false;
+}
 /**
  * Utility to apply active selection mask to a context using destination-in.
  */
@@ -745,6 +869,74 @@ export function finishDrawing(e: MouseEvent | null) {
                 g.selectionPreviewBorder = [];
                 g.drawing = false;
                 if (tempCtx) tempCtx.clearRect(0, 0, tempCtx.canvas.width, tempCtx.canvas.height);
+                renderLayers();
+                return;
+            }
+            if (g.current_tool.id === (Tool as any).CircleSelect.id) {
+                if (g.movingSelection) {
+                    g.movingSelection = false;
+                } else {
+                    let mode: SelectionMode = "replace" as SelectionMode;
+                    if (shift) mode = "add" as SelectionMode;
+                    if (alt) mode = "subtract" as SelectionMode;
+                    if (typeof (window as any).buildCircleSelection === 'function') {
+                        (window as any).buildCircleSelection(g.startX, g.startY, g.pX, g.pY, mode);
+                    }
+                }
+                g.selectionPreviewBorder = [];
+                g.drawing = false;
+                if (tempCtx) tempCtx.clearRect(0, 0, tempCtx.canvas.width, tempCtx.canvas.height);
+                renderLayers();
+                return;
+            }
+            if (g.current_tool.id === (Tool as any).SingleRowSelect.id) {
+                if (g.movingSelection) {
+                    g.movingSelection = false;
+                } else {
+                    let mode: SelectionMode = "replace" as SelectionMode;
+                    if (shift) mode = "add" as SelectionMode;
+                    if (alt) mode = "subtract" as SelectionMode;
+                    if (typeof (window as any).buildSingleRowSelection === 'function') {
+                        (window as any).buildSingleRowSelection(g.pY, mode);
+                    }
+                }
+                g.selectionPreviewBorder = [];
+                g.drawing = false;
+                if (tempCtx) tempCtx.clearRect(0, 0, tempCtx.canvas.width, tempCtx.canvas.height);
+                renderLayers();
+                return;
+            }
+            if (g.current_tool.id === (Tool as any).SingleColumnSelect.id) {
+                if (g.movingSelection) {
+                    g.movingSelection = false;
+                } else {
+                    let mode: SelectionMode = "replace" as SelectionMode;
+                    if (shift) mode = "add" as SelectionMode;
+                    if (alt) mode = "subtract" as SelectionMode;
+                    if (typeof (window as any).buildSingleColumnSelection === 'function') {
+                        (window as any).buildSingleColumnSelection(g.pX, mode);
+                    }
+                }
+                g.selectionPreviewBorder = [];
+                g.drawing = false;
+                if (tempCtx) tempCtx.clearRect(0, 0, tempCtx.canvas.width, tempCtx.canvas.height);
+                renderLayers();
+                return;
+            }
+            if (g.current_tool.id === (Tool as any).Crop.id) {
+                const w = (window as any);
+                if (!w._isResizingCrop && !w._isMovingCrop) {
+                    const x = Math.min(g.startX, g.pX);
+                    const y = Math.min(g.startY, g.pY);
+                    const width = Math.abs(g.pX - g.startX);
+                    const height = Math.abs(g.pY - g.startY);
+                    if (width > 2 && height > 2) {
+                        w.lastCropRect = { x, y, w: width, h: height };
+                    }
+                }
+                w._isResizingCrop = false;
+                w._isMovingCrop = false;
+                g.drawing = false;
                 renderLayers();
                 return;
             }
@@ -843,6 +1035,8 @@ export function finishDrawing(e: MouseEvent | null) {
     console.log(`[DEBUG] Completing drawing operation. Resetting move states.`);
     g.drawing = false;
     g.movingSelection = false;
+    (g as any)._isResizingCrop = false;
+    (g as any)._isMovingCrop = false;
 
     // Reset cursor to tool default
     if (can) {
@@ -1165,6 +1359,17 @@ if (can) {
                 if (tempCtx) tempCtx.clearRect(0, 0, tempCtx.canvas.width, tempCtx.canvas.height);
                 renderLayers();
             }
+        } else if (g.current_tool.id === Tool.Crop.id && (g as any).lastCropRect) {
+            const r = (g as any).lastCropRect;
+            if (typeof (window as any).performCrop === 'function') {
+                (window as any).performCrop(r.x, r.y, r.w, r.h);
+            }
+            (g as any).lastCropRect = null;
+            g.selectionPreviewBorder = [];
+            g.drawing = false;
+            if (tempCtx) tempCtx.clearRect(0, 0, tempCtx.canvas.width, tempCtx.canvas.height);
+            renderLayers();
+            console.log("[DEBUG] Crop finalized via Double-Click");
         }
     }, false);
 }
@@ -1179,6 +1384,7 @@ export function cancelSelection() {
         g.selectionCanvas = null;
         g.selectionMask = null;
         g.selectionBorder = [];
+        g.selectionPreviewBorder = [];
         window.polyPoints = [];
         window.lassoPoints = [];
         g.drawing = false;
@@ -1215,13 +1421,22 @@ document.addEventListener('keydown', (e) => {
             handled = true;
         }
 
+        // 3. Clear pending crop
+        if ((g as any).lastCropRect) {
+            g.selectionPreviewBorder = [];
+            (g as any).lastCropRect = null;
+            g.drawing = false;
+            renderLayers();
+            handled = true;
+        }
+
         if (handled) {
             e.preventDefault();
             e.stopPropagation();
         }
     } else if (e.key === 'Enter') {
         // Finalize Poly/Lasso on Enter
-        if (g.drawing) {
+        if (g.drawing || (g as any).lastCropRect) {
             if (g.current_tool.id === Tool.PolySelect.id && window.polyPoints && window.polyPoints.length > 2) {
                 let mode: SelectionMode = "replace" as SelectionMode;
                 if (e.shiftKey) mode = "add" as SelectionMode;
@@ -1249,6 +1464,16 @@ document.addEventListener('keydown', (e) => {
                 if (tempCtx) tempCtx.clearRect(0, 0, tempCtx.canvas.width, tempCtx.canvas.height);
                 renderLayers();
                 console.log("Lasso Selection finalized via Enter");
+            } else if (g.current_tool.id === (Tool as any).Crop.id && (g as any).lastCropRect) {
+                const r = (g as any).lastCropRect;
+                if (typeof (window as any).performCrop === 'function') {
+                    (window as any).performCrop(r.x, r.y, r.w, r.h);
+                }
+                (g as any).lastCropRect = null;
+                g.selectionPreviewBorder = [];
+                g.drawing = false;
+                renderLayers();
+                console.log("Crop finalized via Enter");
             }
         }
     } else if (e.ctrlKey || e.metaKey) {
