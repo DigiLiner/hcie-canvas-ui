@@ -144,17 +144,18 @@ window.redoImage = () => {
 // Expose these explicitly to window for other scripts (layers.js, project_io.js)
 
 
-// Animation loop for selection border
+// Animation loop for selection border and general rendering
 export function animate() {
-    // If selection is active, we might need to redraw for the marching ants animation
-    // even if the user isn't doing anything.
     const hasPreview = g.selectionPreviewBorder && g.selectionPreviewBorder.length > 0;
-    if (g.isSelectionActive || hasPreview) {
-        // Redraw only if NOT currently drawing (because on_canvas_mouse_move already does it)
-        if (!g.drawing && renderLayers) {
-            renderLayers();
-        }
+    const shouldRender = (g as any).needsRender || g.isSelectionActive || hasPreview;
+
+    if (shouldRender && renderLayers) {
+        // Only pass tempCanvas when actively drawing raster content
+        const live = g.drawing ? tempCanvas as HTMLCanvasElement : undefined;
+        renderLayers(live);
+        (g as any).needsRender = false;
     }
+    
     requestAnimationFrame(animate);
 }
 requestAnimationFrame(animate);
@@ -247,8 +248,16 @@ export function on_canvas_mouse_down(e: MouseEvent) {
     tempCtx.filter = "none";
     tempCtx.clearRect(0, 0, tempCtx.canvas.width, tempCtx.canvas.height);
 
-    // Capture state for Undo/Redo
-    g.previousLayerState = checkLayer.ctx.getImageData(0, 0, g.image_width, g.image_height);
+    // ⚡ PERFORMANCE: Only capture state for tools that modify the layer
+    const isDrawingTool = [
+        Tool.Pen.id, Tool.Brush.id, Tool.Eraser.id, Tool.Spray.id, Tool.Flood_Fill.id
+    ].includes(g.current_tool.id);
+
+    if (isDrawingTool) {
+        g.previousLayerState = checkLayer.ctx.getImageData(0, 0, g.image_width, g.image_height);
+    } else {
+        g.previousLayerState = null;
+    }
 
     switch (g.current_tool.id) {
         case Tool.Wand.id:
@@ -308,7 +317,19 @@ export function on_canvas_mouse_down(e: MouseEvent) {
         case (Tool as any).CircleSelect.id:
         case (Tool as any).SingleRowSelect.id:
         case (Tool as any).SingleColumnSelect.id:
+            // Selection tools handle their own movement or new creation
+            if (g.isSelectionActive && typeof isPointInSelection === 'function' && isPointInSelection(g.pX, g.pY)) {
+                g.movingSelection = true;
+            } else {
+                g.movingSelection = false;
+            }
+            break;
         case (Tool as any).Crop.id:
+            // Ensure we start fresh if no interaction is detected
+            (g as any)._isResizingCrop = false;
+            (g as any)._isMovingCrop = false;
+            (g as any)._cropResizeHandle = -1;
+
             if ((g as any).lastCropRect) {
                 const r = (g as any).lastCropRect;
                 const s = 15; // Detection radius
@@ -318,27 +339,24 @@ export function on_canvas_mouse_down(e: MouseEvent) {
                     {x: r.x, y: r.y + r.h}, {x: r.x + r.w/2, y: r.y + r.h}, {x: r.x + r.w, y: r.y + r.h}
                 ];
                 
-                let handleIndex = -1;
+                let hIdx = -1;
                 for (let i = 0; i < handles.length; i++) {
-                    const h = handles[i];
-                    if (Math.abs(g.pX - h.x) < s && Math.abs(g.pY - h.y) < s) {
-                        handleIndex = i;
-                        break;
+                    if (Math.abs(g.pX - handles[i].x) < s && Math.abs(g.pY - handles[i].y) < s) {
+                        hIdx = i; break;
                     }
                 }
 
-                if (handleIndex !== -1) {
+                if (hIdx !== -1) {
                     (g as any)._isResizingCrop = true;
-                    (g as any)._cropResizeHandle = handleIndex;
+                    (g as any)._cropResizeHandle = hIdx;
                     (g as any)._cropRefRect = { ...r };
-                    console.log(`[DEBUG] Crop resizing handle: ${handleIndex}`);
                 } else if (g.pX >= r.x && g.pX <= r.x + r.w && g.pY >= r.y && g.pY <= r.y + r.h) {
                     (g as any)._isMovingCrop = true;
                     (g as any)._cropRefRect = { ...r };
-                    console.log(`[DEBUG] Crop moving area`);
                 } else {
-                    // Start new crop
+                    // Clicked outside — reset and redraw
                     (g as any).lastCropRect = null;
+                    (g as any).needsRender = true;
                 }
             }
             break;
@@ -383,7 +401,7 @@ export function on_canvas_mouse_down(e: MouseEvent) {
                         g.selectionCanvas = null;
                         g.selectionMask = null;
                         g.selectionBorder = [];
-                        renderLayers();
+                        (g as any).needsRender = true;
                     }
                     if (!window.polyPoints) window.polyPoints = [];
                     window.polyPoints = []; // Force clear just in case
@@ -450,10 +468,8 @@ export function on_canvas_mouse_down(e: MouseEvent) {
             break;
     }
 
-    // Force first-point render for immediate feedback
-    if (g.drawing && typeof renderLayers === 'function') {
-        renderLayers(tempCanvas as HTMLCanvasElement);
-    }
+    // Mark for render
+    (g as any).needsRender = true;
 }
 
 ////////////////////////////////////////////////////
@@ -472,7 +488,69 @@ export function on_canvas_mouse_move(e: MouseEvent) {
     const statusMessage = document.getElementById("statusMessage");
     const mousePosition = document.getElementById("mousePosition");
     if (mousePosition) mousePosition.textContent = `X: ${g.pX}, Y: ${g.pY}`;
-    if (statusMessage) statusMessage.innerHTML = g.drawing ? "Drawing" : "Ready";
+    
+    // --- Crop Tool Enhancements: Status Bar & Cursor & INTERACTION ---
+    if (g.current_tool.id === (Tool as any).Crop.id) {
+        const r = (g as any).lastCropRect;
+        
+        // 1. Status Bar Dimensions
+        if (statusMessage) {
+            if (r) {
+                statusMessage.innerHTML = `Crop: ${Math.round(r.w)} x ${Math.round(r.h)}`;
+            } else {
+                statusMessage.innerHTML = g.drawing ? "Drafting Crop..." : "Ready (Crop)";
+            }
+        }
+
+        // 2. Dynamic Cursor Shape (Delegated to specialized logic)
+        updateCropToolCursor(can, r);
+
+        // 3. Interaction logic (Handle resizing/moving/drafting)
+        if (g.drawing) {
+            if ((g as any)._isResizingCrop && r) {
+                const updatedR = { ...(g as any)._cropRefRect };
+                const dx = g.pX - g.startX;
+                const dy = g.pY - g.startY;
+                
+                // 0:TL, 1:TM, 2:TR, 3:ML, 4:MR, 5:BL, 6:BM, 7:BR
+                switch((g as any)._cropResizeHandle) {
+                    case 0: updatedR.x += dx; updatedR.y += dy; updatedR.w -= dx; updatedR.h -= dy; break;
+                    case 1: updatedR.y += dy; updatedR.h -= dy; break;
+                    case 2: updatedR.y += dy; updatedR.w += dx; updatedR.h -= dy; break;
+                    case 3: updatedR.x += dx; updatedR.w -= dx; break;
+                    case 4: updatedR.w += dx; break;
+                    case 5: updatedR.x += dx; updatedR.w -= dx; updatedR.h += dy; break;
+                    case 6: updatedR.h += dy; break;
+                    case 7: updatedR.w += dx; updatedR.h += dy; break;
+                }
+                if (updatedR.w < 10) updatedR.w = 10;
+                if (updatedR.h < 10) updatedR.h = 10;
+                (g as any).lastCropRect = updatedR;
+            } else if ((g as any)._isMovingCrop && r) {
+                const updatedR = { ...(g as any)._cropRefRect };
+                const dx = g.pX - g.startX;
+                const dy = g.pY - g.startY;
+                updatedR.x += dx;
+                updatedR.y += dy;
+                (g as any).lastCropRect = updatedR;
+            } else {
+                // Drafting initial crop
+                (g as any).lastCropRect = {
+                    x: Math.min(g.startX, g.pX),
+                    y: Math.min(g.startY, g.pY),
+                    w: Math.abs(g.startX - g.pX),
+                    h: Math.abs(g.startY - g.pY)
+                };
+            }
+            g.selectionPreviewBorder = []; // CLEAR: We don't want marching ants for Crop
+            if (typeof renderLayers === 'function') (g as any).needsRender = true;
+        }
+
+        // Early return for Crop Tool to prevent other tool logic interference
+        return;
+    } else {
+        if (statusMessage) statusMessage.innerHTML = g.drawing ? "Drawing" : "Ready";
+    }
 
     // Handle Pan Tool or Middle Mouse Drag
     if (g.current_tool === Tool.Pan || (e.buttons === 4)) { // 4 is middle button
@@ -655,45 +733,6 @@ export function on_canvas_mouse_move(e: MouseEvent) {
                 g.selectionPreviewBorder = [getRectBorder(g.pX, 0, g.pX + 1, g.image_height)];
             }
         }
-    } else if (g.current_tool.id === (Tool as any).Crop.id) {
-        if ((g as any)._isResizingCrop) {
-            const r = { ...(g as any)._cropRefRect };
-            const dx = g.pX - g.startX;
-            const dy = g.pY - g.startY;
-            
-            // 0:TL, 1:TM, 2:TR, 3:ML, 4:MR, 5:BL, 6:BM, 7:BR
-            switch((g as any)._cropResizeHandle) {
-                case 0: r.x += dx; r.y += dy; r.w -= dx; r.h -= dy; break;
-                case 1: r.y += dy; r.h -= dy; break;
-                case 2: r.y += dy; r.w += dx; r.h -= dy; break;
-                case 3: r.x += dx; r.w -= dx; break;
-                case 4: r.w += dx; break;
-                case 5: r.x += dx; r.w -= dx; r.h += dy; break;
-                case 6: r.h += dy; break;
-                case 7: r.w += dx; r.h += dy; break;
-            }
-            // Ensure no negativeDimensions for Crop
-            if (r.w < 10) r.w = 10;
-            if (r.h < 10) r.h = 10;
-
-            (g as any).lastCropRect = r;
-        } else if ((g as any)._isMovingCrop) {
-            const r = { ...(g as any)._cropRefRect };
-            const dx = g.pX - g.startX;
-            const dy = g.pY - g.startY;
-            r.x += dx;
-            r.y += dy;
-            (g as any).lastCropRect = r;
-        } else {
-            // Drafting initial crop
-            (g as any).lastCropRect = {
-                x: Math.min(g.startX, g.pX),
-                y: Math.min(g.startY, g.pY),
-                w: Math.abs(g.startX - g.pX),
-                h: Math.abs(g.startY - g.pY)
-            };
-        }
-        g.selectionPreviewBorder = []; // CLEAR: We don't want marching ants for Crop
     } else if (g.current_tool.id === Tool.Lasso.id) {
         if (g.movingSelection) {
             const dx = g.pX - g.startX;
@@ -764,23 +803,30 @@ export function on_canvas_mouse_move(e: MouseEvent) {
         g.startY = g.pY;
     }
 
-    // Render composition (now handles selection masking internally in layers.js)
-    if (typeof renderLayers === 'function') renderLayers(tempCanvas as HTMLCanvasElement);
+    if (typeof (window as any).renderLayers === 'function') (g as any).needsRender = true;
+    
+    // Render composition
+    if (typeof renderLayers === 'function') (g as any).needsRender = true;
 }
 
 
 export function on_canvas_mouse_up(_e: MouseEvent) {
-    if (can) can.style.cursor = 'crosshair';
-    if (!g.drawing) return;
-
     if (g.current_tool.id === (Tool as any).Crop.id) {
-        const w = (window as any);
-        w._isResizingCrop = false;
-        w._isMovingCrop = false;
+        // CRITICAL: Write flags to (g as any) — same object that updateCropToolCursor reads from
+        (g as any)._isResizingCrop = false;
+        (g as any)._isMovingCrop = false;
+        (g as any)._cropResizeHandle = -1;
         g.drawing = false;
-        if (typeof (window as any).renderLayers === 'function') (window as any).renderLayers();
+        
+        // Immediately update cursor to reflect final idle state
+        if (can) updateCropToolCursor(can, (g as any).lastCropRect);
+        
+        (g as any).needsRender = true;
         return;
     }
+
+    if (can) can.style.cursor = 'crosshair';
+    if (!g.drawing) return;
 
     const manualFinalizeTools = [
         (Tool as any).PolySelect?.id, 
@@ -851,7 +897,7 @@ export function finishDrawing(e: MouseEvent | null) {
                 g.selectionPreviewBorder = [];
                 g.drawing = false;
                 if (tempCtx) tempCtx.clearRect(0, 0, tempCtx.canvas.width, tempCtx.canvas.height);
-                renderLayers();
+                (g as any).needsRender = true;
                 return;
             }
             if (g.current_tool.id === Tool.EllipseSelect.id) {
@@ -869,7 +915,7 @@ export function finishDrawing(e: MouseEvent | null) {
                 g.selectionPreviewBorder = [];
                 g.drawing = false;
                 if (tempCtx) tempCtx.clearRect(0, 0, tempCtx.canvas.width, tempCtx.canvas.height);
-                renderLayers();
+                (g as any).needsRender = true;
                 return;
             }
             if (g.current_tool.id === (Tool as any).CircleSelect.id) {
@@ -886,7 +932,7 @@ export function finishDrawing(e: MouseEvent | null) {
                 g.selectionPreviewBorder = [];
                 g.drawing = false;
                 if (tempCtx) tempCtx.clearRect(0, 0, tempCtx.canvas.width, tempCtx.canvas.height);
-                renderLayers();
+                (g as any).needsRender = true;
                 return;
             }
             if (g.current_tool.id === (Tool as any).SingleRowSelect.id) {
@@ -903,7 +949,7 @@ export function finishDrawing(e: MouseEvent | null) {
                 g.selectionPreviewBorder = [];
                 g.drawing = false;
                 if (tempCtx) tempCtx.clearRect(0, 0, tempCtx.canvas.width, tempCtx.canvas.height);
-                renderLayers();
+                (g as any).needsRender = true;
                 return;
             }
             if (g.current_tool.id === (Tool as any).SingleColumnSelect.id) {
@@ -920,7 +966,7 @@ export function finishDrawing(e: MouseEvent | null) {
                 g.selectionPreviewBorder = [];
                 g.drawing = false;
                 if (tempCtx) tempCtx.clearRect(0, 0, tempCtx.canvas.width, tempCtx.canvas.height);
-                renderLayers();
+                (g as any).needsRender = true;
                 return;
             }
             if (g.current_tool.id === (Tool as any).Crop.id) {
@@ -957,7 +1003,7 @@ export function finishDrawing(e: MouseEvent | null) {
                 window.lassoPoints = [];
                 g.drawing = false;
                 if (tempCtx) tempCtx.clearRect(0, 0, tempCtx.canvas.width, tempCtx.canvas.height);
-                renderLayers();
+                (g as any).needsRender = true;
                 return;
             }
             if (g.current_tool.id === Tool.PolySelect.id) {
@@ -1046,8 +1092,8 @@ export function finishDrawing(e: MouseEvent | null) {
     // Clear temp canvas
     if (tempCtx) tempCtx.clearRect(0, 0, tempCtx.canvas.width, tempCtx.canvas.height);
 
-    // Final render
-    renderLayers();
+    // Final render request
+    (g as any).needsRender = true;
 
     // Update thumbnails
     if (typeof updateLayerPanel === 'function') updateLayerPanel();
@@ -1517,6 +1563,59 @@ document.addEventListener('keydown', (e) => {
         }
     }
 });
+
+/**
+ * Updates the canvas cursor based on crop tool state (hover, resize, move, or idle).
+ */
+function updateCropToolCursor(can: HTMLCanvasElement, r: any) {
+    if (!r) {
+        can.style.cursor = 'crosshair';
+        return;
+    }
+
+    const cursors = [
+        'nwse-resize', 'ns-resize', 'nesw-resize',
+        'ew-resize', 'ew-resize',
+        'nesw-resize', 'ns-resize', 'nwse-resize'
+    ];
+
+    // If currently resizing or moving, lock cursor to that mode
+    if ((g as any)._isResizingCrop) {
+        const hIdx = (g as any)._cropResizeHandle;
+        if (hIdx >= 0 && hIdx < cursors.length) {
+            can.style.cursor = cursors[hIdx];
+            return;
+        }
+    }
+
+    if ((g as any)._isMovingCrop) {
+        can.style.cursor = 'move';
+        return;
+    }
+
+    // Idle hovered state detection
+    const s = 12 / g.zoom; // Approx 12 screen pixels
+    const handles = [
+        { x: r.x, y: r.y }, { x: r.x + r.w / 2, y: r.y }, { x: r.x + r.w, y: r.y },
+        { x: r.x, y: r.y + r.h / 2 }, { x: r.x + r.w, y: r.y + r.h / 2 },
+        { x: r.x, y: r.y + r.h }, { x: r.x + r.w / 2, y: r.y + r.h }, { x: r.x + r.w, y: r.y + r.h }
+    ];
+
+    let hoverIdx = -1;
+    for (let i = 0; i < handles.length; i++) {
+        if (Math.abs(g.pX - handles[i].x) < s && Math.abs(g.pY - handles[i].y) < s) {
+            hoverIdx = i; break;
+        }
+    }
+
+    if (hoverIdx !== -1) {
+        can.style.cursor = cursors[hoverIdx];
+    } else if (g.pX >= r.x && g.pX <= r.x + r.w && g.pY >= r.y && g.pY <= r.y + r.h) {
+        can.style.cursor = 'move';
+    } else {
+        can.style.cursor = 'crosshair';
+    }
+}
 
 // TEMPORARY WINDOW BINDINGS
 if (typeof window !== 'undefined') {

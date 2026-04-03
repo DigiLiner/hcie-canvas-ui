@@ -255,7 +255,9 @@ export function renderLayers(liveCanvas?: HTMLCanvasElement) {
     // Draw Crop UI if a crop area is pending confirmation
     if ((g as any).lastCropRect) {
         const r = (g as any).lastCropRect;
-        ctx.save();
+        // Avoid drawing a full-screen blackout if dimensions are too small (threshold 5px)
+        if (r.w > 5 && r.h > 5) {
+            ctx.save();
         
         // 1. Draw a semi-transparent dark overlay outside the crop area
         ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
@@ -304,6 +306,8 @@ export function renderLayers(liveCanvas?: HTMLCanvasElement) {
 
         ctx.restore();
     }
+}
+
 
     // Draw Brush Preview Circle (follow mouse) for drawing tools
     const drawingTools = [Tool.Pen.id, Tool.Brush.id, Tool.Eraser.id, Tool.Spray.id];
